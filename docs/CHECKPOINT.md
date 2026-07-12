@@ -6,7 +6,7 @@
 - [x] Phase 3 — Router (completed: 2026-07-12)
 - [x] Phase 4 — Race execution (completed: 2026-07-12)
 - [x] Phase 5 — Pulse (auto-classifier) (completed: 2026-07-12)
-- [ ] Phase 6 — Auth & logging
+- [x] Phase 6 — Auth & logging (completed: 2026-07-12)
 - [ ] Phase 7 — Tool-calling & integration
 
 ## Files that exist so far
@@ -27,10 +27,14 @@
 - `race.py` — `call_candidate()`, `execute_race()`, `_race_parallel()`, `RaceResult` dataclass, `close_http_client()`.
 - `config.py` now has `NVIDIA_FIRST_TIMEOUT = 2.0` and `TIER_MAX_TOKENS = {fast:300, mid:800, strong:2000}`.
 - `classifier.py` — Pulse auto-classifier with `extract_features()`, `needs_llm_classification()`, `llm_classify_confidence()`, `decision_score()`, `classify_tier()`, and `resolve_tier()`. Layer 4 adaptive thresholds left as documented placeholder.
+- `auth.py` — api_keys verification, generation and own-proxy rate limiter check.
+- `create_api_key.py` — key creation script.
+- `logger.py` — safe fire-and-forget log insertion and diagnostic fetch functions.
+- `supabase_schema.sql` — PostgreSQL database migration schema.
 
 ## Known issues / TODOs left for later phases
-- The "1 full retry after 2-3s backoff" wrapper around execute_race() — to be added in Phase 6/7 endpoint handler.
-- Authentication, logging, Supabase integrations — Phases 6-7.
+- Wiring of Pulse, auth, and logging into the final `/v1/complete` endpoint with retry mechanism (Phase 7).
+- Integrating tool whitelisting and verification (Phase 7).
 
 ## Decisions made (that future phases must respect)
 - Algorithm: UCB1, not Thompson Sampling or LinUCB.
