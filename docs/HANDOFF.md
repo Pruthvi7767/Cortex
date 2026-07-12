@@ -1,44 +1,28 @@
-# Handoff to Phase 5
+# Handoff to Phase 6
 
 ## What THIS phase built
-- `provider_adapters.py` — `build_request()`, `parse_response()` (raises `ParseError` on schema drift), `get_endpoint_url()`, `get_auth_headers()`. All providers use the OpenAI-compat shape; endpoint URL is resolved from config.py's registry.
-- `validation.py` — `validate_response(parsed, expected_tool_schema, tool_whitelist) -> (bool, reason_str)`. Fixed failure reason strings (used by Phase 6 logging): `empty`, `refused`, `invalid_tool_schema`, `hallucinated_tool`.
-- `race.py` — `call_candidate()`, `execute_race()` (main entry point), `_race_parallel()`, `RaceResult` dataclass, `close_http_client()`.
-- `config.py` additions: `NVIDIA_FIRST_TIMEOUT = 2.0`, `TIER_MAX_TOKENS = {fast:300, mid:800, strong:2000}`.
+- `classifier.py` — Pulse Auto-Classifier. It evaluates incoming prompts using cheap heuristic features (Layer 1) and optionally a fast LLM classification call (Layer 2) to compute a `decision_score` (Layer 3), matching it against thresholds (Layer 4 placeholder) to resolve the tier to `"fast"`, `"mid"`, or `"strong"`.
+- It exports `resolve_tier(prompt, explicit_tier, context) -> str`.
 
 ## What THIS phase explicitly did NOT build
-- Pulse auto-classifier (Phase 5) — tier selection before calling execute_race().
-- The "1 full retry after 2-3s backoff" wrapper (Phase 6/7) — execute_race() handles one pass only.
-- Auth, logging, Supabase integrations (Phases 6-7).
+- The final public endpoint in `main.py` (Phase 7).
+- Auth, logging, and Supabase integration (Phase 6).
+- The "1 full retry after 2-3s backoff" wrapper.
 
-## Key interface for Phase 5 to understand
+## Key interface for Phase 6 to understand
 
-### `execute_race(tier, messages, max_tokens=None, estimated_tokens=0, tools=None, tool_whitelist=None, expected_tool_schema=None) -> RaceResult`
-- **This is the function Phase 6/7's endpoint handler calls.** Phase 5 (Pulse) decides the tier BEFORE this is called, not inside it.
-- `tier` is one of `"strong"` | `"mid"` | `"fast"`.
-- Returns `RaceResult(success, content, tool_calls, model_used, provider_used, latency_ms, error_type)`.
+### `resolve_tier(prompt: str, explicit_tier: str = None, context: dict = None) -> str`
+- **This is the function the eventual public endpoint must call before `execute_race()`.**
+- If `explicit_tier` is provided, Pulse is skipped entirely and the explicit tier is returned (manual routing).
+- If `explicit_tier` is `None`, Pulse computes and returns the ideal tier (auto routing).
 
-### `RaceResult` (dataclass in race.py)
-```python
-@dataclass
-class RaceResult:
-    success:       bool
-    content:       str | None
-    tool_calls:    list | None
-    model_used:    str | None
-    provider_used: str | None
-    latency_ms:    float
-    error_type:    str | None   # None on success
-```
-
-## Exact next step for Phase 5
-Phase 5 builds `classifier.py` (Pulse). Its output is a tier string (`"strong"` | `"mid"` | `"fast"`) that gets passed directly to `execute_race(tier=..., messages=...)`. Phase 5 does NOT modify execute_race or race.py — it only builds the classifier logic that sits in front of the execution layer.
+## Exact next step for Phase 6
+Phase 6 (Auth & Logging) builds the Supabase integration. It will construct the API key authentication system and the unified logging system that captures request telemetry. The logging system needs to record whether the request tier was selected manually or via auto-routing (`pulse`), so the distinction between `explicit_tier` and the Pulse fallback is important for Phase 6 to track.
 
 ## Watch out for
-- The "1 retry" logic belongs in Phase 6/7's endpoint handler — NOT inside execute_race(). The endpoint calls execute_race() once, checks if result.success, waits 2-3s, then calls execute_race() at most once more.
-- `close_http_client()` from race.py must be called in FastAPI's lifespan shutdown handler (add this to main.py in Phase 6 or 7).
-- Error type strings from validation.py (`"empty"`, `"refused"`, `"invalid_tool_schema"`, `"hallucinated_tool"`) must be used as-is for Phase 6 Supabase logging columns — do not rename them.
+- Do not integrate `resolve_tier` into a public FastAPI endpoint yet; Phase 6 focuses on the Auth & Logging infrastructure (`auth.py`, `logger.py`). The final wire-up happens in Phase 7.
+- Make sure to use the exact `error_type` strings from `validation.py` for your logging schema.
 
 ## Environment/config notes
 - No new `.env` variables added this phase.
-- No new pip dependencies added this phase (httpx was already in requirements.txt from Phase 1).
+- No new pip dependencies added this phase.

@@ -5,7 +5,7 @@
 - [x] Phase 2 — State layer (completed: 2026-07-12)
 - [x] Phase 3 — Router (completed: 2026-07-12)
 - [x] Phase 4 — Race execution (completed: 2026-07-12)
-- [ ] Phase 5 — Pulse (auto-classifier)
+- [x] Phase 5 — Pulse (auto-classifier) (completed: 2026-07-12)
 - [ ] Phase 6 — Auth & logging
 - [ ] Phase 7 — Tool-calling & integration
 
@@ -26,9 +26,9 @@
 - `validation.py` — `validate_response()` gate; failure reasons: `empty`, `refused`, `invalid_tool_schema`, `hallucinated_tool`.
 - `race.py` — `call_candidate()`, `execute_race()`, `_race_parallel()`, `RaceResult` dataclass, `close_http_client()`.
 - `config.py` now has `NVIDIA_FIRST_TIMEOUT = 2.0` and `TIER_MAX_TOKENS = {fast:300, mid:800, strong:2000}`.
+- `classifier.py` — Pulse auto-classifier with `extract_features()`, `needs_llm_classification()`, `llm_classify_confidence()`, `decision_score()`, `classify_tier()`, and `resolve_tier()`. Layer 4 adaptive thresholds left as documented placeholder.
 
 ## Known issues / TODOs left for later phases
-- Pulse Tier auto-classifier (classifier.py) — Phase 5.
 - The "1 full retry after 2-3s backoff" wrapper around execute_race() — to be added in Phase 6/7 endpoint handler.
 - Authentication, logging, Supabase integrations — Phases 6-7.
 
