@@ -16,11 +16,22 @@ if os.path.exists(env_file):
 else:
     load_dotenv(".env")
 
-# Tier definitions and timeouts
+# Tier definitions and timeouts (seconds per model attempt)
 TIER_TIMEOUTS = {
     "fast": 1.5,
     "mid": 3.0,
     "strong": 5.0
+}
+
+# Short timeout for the NVIDIA-first single-shot attempt before fanning out to others.
+# NVIDIA has no daily cap so we can afford an aggressive cutoff here.
+NVIDIA_FIRST_TIMEOUT = 2.0
+
+# Maximum tokens per response per tier — prevents runaway generation consuming quota.
+TIER_MAX_TOKENS = {
+    "fast": 300,
+    "mid": 800,
+    "strong": 2000
 }
 
 # Redis configuration

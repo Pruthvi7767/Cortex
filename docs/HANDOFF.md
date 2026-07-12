@@ -1,43 +1,44 @@
-# Handoff to Phase 4
+# Handoff to Phase 5
 
 ## What THIS phase built
-- `router.py` — UCB1 candidate selection with full filtering pipeline and tier cascade.
-- `MODEL_REGISTRY` added to `config.py` — all confirmed model IDs for strong/mid/fast tiers across NVIDIA, Groq, Cerebras, Google Gemini, Mistral, Cloudflare, and Ollama, with `max_context` token sizes.
-
-## Key functions available to Phase 4
-
-### `get_candidates_with_cascade(tier, k=3, estimated_tokens=0) -> CandidateResult`
-- **Primary entry point for Phase 4.** Call this to get a ranked, filtered candidate list.
-- Returns `CandidateResult(tier: str, candidates: list)` — a NamedTuple.
-- `tier` on return is the **actual tier used** (may differ from requested if cascade fired).
-- `candidates` is a list of dicts: `{"provider": str, "model_id": str, "max_context": int}`.
-- Already handles: active-provider filtering, circuit-breaker exclusion, quota/RPM gating, context-window filtering, UCB1 ranking, and tier fallback.
-
-### `split_nvidia_first(candidates: list) -> tuple`
-- Takes the candidates list and returns `(nvidia_candidates, others)`.
-- **Call this immediately after `get_candidates_with_cascade`** — Phase 4's execution loop tries `nvidia_candidates` first (single shot, short NVIDIA timeout from `TIER_TIMEOUTS`), then fans out to `others` only if needed.
-
-### `ucb1_score(provider, model_id, tier) -> float`
-- Not needed directly by Phase 4 (called internally by get_candidates). Listed for awareness.
+- `provider_adapters.py` — `build_request()`, `parse_response()` (raises `ParseError` on schema drift), `get_endpoint_url()`, `get_auth_headers()`. All providers use the OpenAI-compat shape; endpoint URL is resolved from config.py's registry.
+- `validation.py` — `validate_response(parsed, expected_tool_schema, tool_whitelist) -> (bool, reason_str)`. Fixed failure reason strings (used by Phase 6 logging): `empty`, `refused`, `invalid_tool_schema`, `hallucinated_tool`.
+- `race.py` — `call_candidate()`, `execute_race()` (main entry point), `_race_parallel()`, `RaceResult` dataclass, `close_http_client()`.
+- `config.py` additions: `NVIDIA_FIRST_TIMEOUT = 2.0`, `TIER_MAX_TOKENS = {fast:300, mid:800, strong:2000}`.
 
 ## What THIS phase explicitly did NOT build
-- No HTTP calls to any LLM provider.
-- No timeout/race execution logic.
-- No response validation gate.
-- No Pulse classifier (that is Phase 5).
+- Pulse auto-classifier (Phase 5) — tier selection before calling execute_race().
+- The "1 full retry after 2-3s backoff" wrapper (Phase 6/7) — execute_race() handles one pass only.
+- Auth, logging, Supabase integrations (Phases 6-7).
 
-## Exact next step for Phase 4
-1. Import `get_candidates_with_cascade` and `split_nvidia_first` from `router.py`.
-2. Import `TIER_TIMEOUTS` from `config.py` for per-tier HTTP timeout budgets.
-3. Import `update_latency`, `record_success`, `record_failure`, `increment_rpm`, `increment_tier_requests` from `redis_store.py` to update state after each attempt.
-4. Import `record_circuit_failure`, `reset_circuit` from `circuit_breaker.py` to update breaker state based on outcomes.
-5. Build `race.py` which: calls candidates in NVIDIA-first order, enforces TIER_TIMEOUTS, passes responses through a validation gate (non-empty, not refusal pattern), and returns the first winner. Implements exactly 1 full retry on total tier failure with 2-3s backoff.
+## Key interface for Phase 5 to understand
+
+### `execute_race(tier, messages, max_tokens=None, estimated_tokens=0, tools=None, tool_whitelist=None, expected_tool_schema=None) -> RaceResult`
+- **This is the function Phase 6/7's endpoint handler calls.** Phase 5 (Pulse) decides the tier BEFORE this is called, not inside it.
+- `tier` is one of `"strong"` | `"mid"` | `"fast"`.
+- Returns `RaceResult(success, content, tool_calls, model_used, provider_used, latency_ms, error_type)`.
+
+### `RaceResult` (dataclass in race.py)
+```python
+@dataclass
+class RaceResult:
+    success:       bool
+    content:       str | None
+    tool_calls:    list | None
+    model_used:    str | None
+    provider_used: str | None
+    latency_ms:    float
+    error_type:    str | None   # None on success
+```
+
+## Exact next step for Phase 5
+Phase 5 builds `classifier.py` (Pulse). Its output is a tier string (`"strong"` | `"mid"` | `"fast"`) that gets passed directly to `execute_race(tier=..., messages=...)`. Phase 5 does NOT modify execute_race or race.py — it only builds the classifier logic that sits in front of the execution layer.
 
 ## Watch out for
-- The retry ceiling from AGENT.md Section 5: **exactly 1 full retry** of the entire tier cascade — never more than 2 total passes.
-- `record_failure` vs quota events are SEPARATE — Phase 4 must call `record_failure` only on real errors (timeout/500/malformed), never on 429. On 429 call `increment_quota_usage` instead (which pauses the model without touching quality score).
-- `TIER_TIMEOUTS` = `{"fast": 1.5, "mid": 3.0, "strong": 5.0}` seconds — these are the **per-model attempt** timeouts.
+- The "1 retry" logic belongs in Phase 6/7's endpoint handler — NOT inside execute_race(). The endpoint calls execute_race() once, checks if result.success, waits 2-3s, then calls execute_race() at most once more.
+- `close_http_client()` from race.py must be called in FastAPI's lifespan shutdown handler (add this to main.py in Phase 6 or 7).
+- Error type strings from validation.py (`"empty"`, `"refused"`, `"invalid_tool_schema"`, `"hallucinated_tool"`) must be used as-is for Phase 6 Supabase logging columns — do not rename them.
 
 ## Environment/config notes
 - No new `.env` variables added this phase.
-- No new dependencies added this phase.
+- No new pip dependencies added this phase (httpx was already in requirements.txt from Phase 1).

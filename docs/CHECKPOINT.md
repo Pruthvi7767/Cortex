@@ -4,7 +4,7 @@
 - [x] Phase 1 — Foundation (completed: 2026-07-12)
 - [x] Phase 2 — State layer (completed: 2026-07-12)
 - [x] Phase 3 — Router (completed: 2026-07-12)
-- [ ] Phase 4 — Race execution
+- [x] Phase 4 — Race execution (completed: 2026-07-12)
 - [ ] Phase 5 — Pulse (auto-classifier)
 - [ ] Phase 6 — Auth & logging
 - [ ] Phase 7 — Tool-calling & integration
@@ -22,12 +22,15 @@
 - `quota_tracker.py` — `check_availability()` filter based on quota, rate limits, and circuit state.
 - `router.py` — UCB1 scoring, `get_candidates()`, `split_nvidia_first()`, `get_candidates_with_cascade()` with tier cascade.
 - `MODEL_REGISTRY` added to `config.py` — all confirmed model IDs for strong/mid/fast tiers across 7 providers (NVIDIA, Groq, Cerebras, Google, Mistral, Cloudflare, Ollama).
+- `provider_adapters.py` — `build_request()`, `parse_response()`, `get_endpoint_url()`, `get_auth_headers()`, `ParseError`.
+- `validation.py` — `validate_response()` gate; failure reasons: `empty`, `refused`, `invalid_tool_schema`, `hallucinated_tool`.
+- `race.py` — `call_candidate()`, `execute_race()`, `_race_parallel()`, `RaceResult` dataclass, `close_http_client()`.
+- `config.py` now has `NVIDIA_FIRST_TIMEOUT = 2.0` and `TIER_MAX_TOKENS = {fast:300, mid:800, strong:2000}`.
 
 ## Known issues / TODOs left for later phases
-- Model race execution (HTTP calls, timeouts, response validation gate) — Phase 4.
 - Pulse Tier auto-classifier (classifier.py) — Phase 5.
+- The "1 full retry after 2-3s backoff" wrapper around execute_race() — to be added in Phase 6/7 endpoint handler.
 - Authentication, logging, Supabase integrations — Phases 6-7.
-- Authentication, logging, and Supabase integrations (Phases 6-7).
 
 ## Decisions made (that future phases must respect)
 - Algorithm: UCB1, not Thompson Sampling or LinUCB.
