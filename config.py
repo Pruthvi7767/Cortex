@@ -45,6 +45,114 @@ RPM_LIMITS = {
     "default": 30
 }
 
+# Model registry — single source of truth for which models exist in each tier.
+# Ordered by provider priority within each tier (NVIDIA > Groq > Cerebras > Google > Mistral > Cloudflare > Ollama).
+# max_context is in tokens; use official spec where known, conservative placeholder otherwise.
+# Vision models are excluded — they form a separate pool handled in a future phase.
+MODEL_REGISTRY = {
+    "strong": [
+        # NVIDIA NIM strong
+        {"provider": "nvidia", "model_id": "openai/gpt-oss-120b",                    "max_context": 128000},
+        {"provider": "nvidia", "model_id": "abacusai/dracarys-llama-3.1-70b-instruct","max_context": 128000},
+        {"provider": "nvidia", "model_id": "sarvamai/sarvam-m",                       "max_context": 32768},
+        {"provider": "nvidia", "model_id": "meta/llama-3.1-70b-instruct",             "max_context": 128000},
+        {"provider": "nvidia", "model_id": "nvidia/nemotron-3-ultra-550b-a55b",       "max_context": 128000},
+        # Groq strong
+        {"provider": "groq",   "model_id": "openai/gpt-oss-120b",                    "max_context": 128000},
+        {"provider": "groq",   "model_id": "llama-3.3-70b-versatile",                "max_context": 128000},
+        {"provider": "groq",   "model_id": "groq/compound",                          "max_context": 128000},
+        # Cerebras strong
+        {"provider": "cerebras","model_id": "zai-glm-4.7",                           "max_context": 128000},
+        {"provider": "cerebras","model_id": "gpt-oss-120b",                          "max_context": 128000},
+        # Google strong
+        {"provider": "google", "model_id": "gemini-2.5-pro",                         "max_context": 2097152},
+        {"provider": "google", "model_id": "gemini-3-pro-preview",                   "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-pro-latest",                      "max_context": 1048576},
+        # Mistral strong
+        {"provider": "mistral","model_id": "mistral-large-latest",                   "max_context": 128000},
+        {"provider": "mistral","model_id": "magistral-medium-latest",                "max_context": 256000},
+        # Cloudflare strong
+        {"provider": "cloudflare","model_id": "@cf/openai/gpt-oss-120b",             "max_context": 128000},
+        {"provider": "cloudflare","model_id": "@cf/zai-org/glm-5.2",                 "max_context": 128000},
+        {"provider": "cloudflare","model_id": "@cf/moonshotai/kimi-k2.6",            "max_context": 128000},
+        # Ollama Cloud strong
+        {"provider": "ollama", "model_id": "deepseek-v4-pro",                        "max_context": 128000},
+        {"provider": "ollama", "model_id": "deepseek-v3.2",                          "max_context": 128000},
+        {"provider": "ollama", "model_id": "mistral-large-3:675b",                   "max_context": 128000},
+        {"provider": "ollama", "model_id": "glm-5.2",                                "max_context": 128000},
+        {"provider": "ollama", "model_id": "kimi-k2.7-code",                         "max_context": 128000},
+        {"provider": "ollama", "model_id": "nemotron-3-ultra",                       "max_context": 128000},
+        {"provider": "ollama", "model_id": "qwen3.5:397b",                           "max_context": 32768},
+        {"provider": "ollama", "model_id": "gpt-oss:120b",                           "max_context": 128000},
+    ],
+    "mid": [
+        # NVIDIA NIM mid
+        {"provider": "nvidia", "model_id": "openai/gpt-oss-20b",                     "max_context": 128000},
+        {"provider": "nvidia", "model_id": "qwen/qwen3.5-122b-a10b",                 "max_context": 128000},
+        {"provider": "nvidia", "model_id": "nvidia/nemotron-3-super-120b-a12b",      "max_context": 128000},
+        {"provider": "nvidia", "model_id": "upstage/solar-10.7b-instruct",           "max_context": 4096},
+        {"provider": "nvidia", "model_id": "nvidia/llama-3.3-nemotron-super-49b-v1", "max_context": 128000},
+        {"provider": "nvidia", "model_id": "stockmark/stockmark-2-100b-instruct",    "max_context": 32768},
+        {"provider": "nvidia", "model_id": "mistralai/mistral-large-3-675b-instruct-2512","max_context": 128000},
+        {"provider": "nvidia", "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning","max_context": 32768},
+        {"provider": "nvidia", "model_id": "mistralai/mistral-medium-3.5-128b",      "max_context": 128000},
+        # Groq mid
+        {"provider": "groq",   "model_id": "meta-llama/llama-4-scout-17b-16e-instruct","max_context": 10485760},
+        {"provider": "groq",   "model_id": "qwen/qwen3-32b",                         "max_context": 32768},
+        {"provider": "groq",   "model_id": "qwen/qwen3.6-27b",                       "max_context": 32768},
+        {"provider": "groq",   "model_id": "openai/gpt-oss-20b",                     "max_context": 128000},
+        # Cerebras mid
+        {"provider": "cerebras","model_id": "gemma-4-31b",                           "max_context": 131072},
+        # Google mid
+        {"provider": "google", "model_id": "gemini-2.5-flash",                       "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-3-flash-preview",                 "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-3.5-flash",                       "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-flash-latest",                    "max_context": 1048576},
+        # Mistral mid
+        {"provider": "mistral","model_id": "mistral-medium-3.5",                     "max_context": 128000},
+        {"provider": "mistral","model_id": "codestral-latest",                       "max_context": 32000},
+        {"provider": "mistral","model_id": "devstral-latest",                        "max_context": 32000},
+        {"provider": "mistral","model_id": "open-mistral-nemo",                      "max_context": 128000},
+        # Cloudflare mid
+        {"provider": "cloudflare","model_id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast","max_context": 128000},
+        {"provider": "cloudflare","model_id": "@cf/nvidia/nemotron-3-120b-a12b",     "max_context": 128000},
+        {"provider": "cloudflare","model_id": "@cf/qwen/qwen2.5-coder-32b-instruct", "max_context": 32768},
+        {"provider": "cloudflare","model_id": "@cf/qwen/qwq-32b",                    "max_context": 32768},
+        {"provider": "cloudflare","model_id": "@cf/mistralai/mistral-small-3.1-24b-instruct","max_context": 32768},
+        # Ollama Cloud mid
+        {"provider": "ollama", "model_id": "nemotron-3-super",                       "max_context": 128000},
+        {"provider": "ollama", "model_id": "gemma3:27b",                             "max_context": 131072},
+    ],
+    "fast": [
+        # NVIDIA NIM fast
+        {"provider": "nvidia", "model_id": "nvidia/nemotron-3-nano-30b-a3b",         "max_context": 32768},
+        {"provider": "nvidia", "model_id": "google/gemma-2-2b-it",                   "max_context": 8192},
+        {"provider": "nvidia", "model_id": "mistralai/mistral-small-4-119b-2603",    "max_context": 32768},
+        {"provider": "nvidia", "model_id": "mistralai/ministral-14b-instruct-2512",  "max_context": 128000},
+        {"provider": "nvidia", "model_id": "nvidia/nemotron-mini-4b-instruct",       "max_context": 4096},
+        {"provider": "nvidia", "model_id": "meta/llama-3.1-8b-instruct",             "max_context": 128000},
+        # Groq fast
+        {"provider": "groq",   "model_id": "llama-3.1-8b-instant",                  "max_context": 128000},
+        {"provider": "groq",   "model_id": "groq/compound-mini",                     "max_context": 128000},
+        {"provider": "groq",   "model_id": "allam-2-7b",                             "max_context": 8192},
+        # whisper-large-v3-turbo excluded per user note — not a general reasoning model
+        # Google fast
+        {"provider": "google", "model_id": "gemini-2.0-flash",                       "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-2.5-flash-lite",                  "max_context": 1048576},
+        {"provider": "google", "model_id": "gemini-3.1-flash-lite",                  "max_context": 1048576},
+        # Mistral fast
+        {"provider": "mistral","model_id": "mistral-small-latest",                   "max_context": 32000},
+        {"provider": "mistral","model_id": "ministral-14b-latest",                   "max_context": 128000},
+        {"provider": "mistral","model_id": "ministral-8b-latest",                    "max_context": 128000},
+        {"provider": "mistral","model_id": "ministral-3b-latest",                    "max_context": 32000},
+        # Cloudflare fast
+        {"provider": "cloudflare","model_id": "@cf/openai/gpt-oss-20b",              "max_context": 128000},
+        {"provider": "cloudflare","model_id": "@cf/meta/llama-3.1-8b-instruct-fp8",  "max_context": 128000},
+        # Ollama Cloud fast
+        {"provider": "ollama", "model_id": "gpt-oss:20b",                            "max_context": 128000},
+    ],
+}
+
 # Provider Registry (function to allow future hot-reloading)
 def get_provider_registry() -> List[Dict]:
     """
