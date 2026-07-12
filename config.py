@@ -23,6 +23,28 @@ TIER_TIMEOUTS = {
     "strong": 5.0
 }
 
+# Redis configuration
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# Quota limits (daily limit of requests/tokens depending on provider semantics)
+QUOTA_LIMITS = {
+    "nvidia": 999999999,   # RPM limited, practically no daily cap
+    "cerebras": 1000000,   # ~1M tokens
+    "groq": 10000,         # Request count placeholder
+    "google": 1500,        # ~1500 requests
+    # Default for all others
+    "default": 5000
+}
+
+# RPM limits
+RPM_LIMITS = {
+    "nvidia": 60,
+    "cerebras": 60,
+    "groq": 30,
+    "google": 15,
+    "default": 30
+}
+
 # Provider Registry (function to allow future hot-reloading)
 def get_provider_registry() -> List[Dict]:
     """

@@ -1,23 +1,22 @@
-# Handoff to Phase 2
+# Handoff to Phase 3
 
 ## What THIS phase built
-- `requirements.txt` with base dependencies (including `redis` for the next phase).
-- `.env.example` setting up the environment variable names.
-- `config.py` containing the `get_provider_registry` and `get_active_providers` logic, mapping provider keys to URLs and tiers.
-- `main.py` containing a minimal FastAPI app layout and startup provider validation.
-- `Dockerfile` and `docker-compose.yml` to spin up the app and a Redis server.
+- `redis_store.py`: Contains a shared async connection pool and functions to update state for UCB1 and circuit breaker components. Keys track request count, success rate (EMA based), latency (EMA), RPM used, circuit breaker status, and daily quota.
+- `circuit_breaker.py`: Manages the state machine for each model (CLOSED, OPEN, HALF_OPEN) and controls lazy transitions on read (`get_circuit_state`). Backoff is capped at 10 minutes.
+- `quota_tracker.py`: Exposes a single unified boolean check function `check_availability(provider, model_id) -> bool` that verifies the model is not rate limited, not quota exhausted, and its circuit breaker is not OPEN.
 
 ## What THIS phase explicitly did NOT do (left for next phase)
-- Did not establish any Redis connections or implement `redis_store.py`.
-- Did not build the circuit breaker state machine or the quota tracker.
-- Did not implement routing or UCB1 logic.
+- Did not build the UCB1 scoring logic (the actual math and ranking).
+- Did not implement candidate candidate selection algorithms or the router endpoint.
+- Did not define how a candidate race will be executed (Phase 4).
 
 ## Exact next step
-- Start by reading `docs/CHECKPOINT.md` and this `HANDOFF.md`.
-- Phase 2 focuses on creating `redis_store.py`, `quota_tracker.py`, and `circuit_breaker.py`.
-- You will need to use `redis.asyncio` for the state layer, connecting to the `REDIS_URL` defined in `.env` (default `redis://localhost:6379` / `redis://redis:6379` via compose).
-- You can leverage the `get_active_providers()` from `config.py` to initialize state in Redis for each active provider ID.
+- Read `docs/CHECKPOINT.md` and this `HANDOFF.md`.
+- Build the UCB1 routing logic inside `router.py`.
+- You will need to use `check_availability()` from `quota_tracker.py` to filter candidates.
+- You will also need to read `model:{provider}:{model_id}:success_rate` and `model:{provider}:{model_id}:request_count` to apply the UCB1 math.
+- You will also need the global `tier:{tier}:total_requests` count from Redis to compute UCB1 properly.
 
 ## Environment/config notes
-- The app uses `ENVIRONMENT` to load `.env.development` or `.env.production`.
-- The Redis package installed is `redis` and you should use `import redis.asyncio as redis` for the async implementation (verified via context7).
+- You can find updated `QUOTA_LIMITS` and `RPM_LIMITS` inside `config.py`.
+- Any Redis interaction you do should wrap around `_safe_execute` in `redis_store.py` (or handle `RedisConnectionError`) to gracefully degrade if the database falls over.
