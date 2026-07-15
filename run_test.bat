@@ -1,0 +1,2 @@
+set CORTEX_API_KEY=sk-cortex-0ygtCEspCVoyrjQPgdnvrxDeNAkrWOkr
+python run_phase9_test.py

@@ -40,6 +40,7 @@ from redis_store import (
     record_failure,
     increment_rpm,
     increment_tier_requests,
+    update_last_used,
     _safe_execute,
 )
 from circuit_breaker import record_circuit_failure, reset_circuit
@@ -90,14 +91,31 @@ class RaceResult:
                                 #  "empty" | "refused" | "invalid_tool_schema" |
                                 #  "hallucinated_tool" | "context_exceeded" | None
 
+    # Telemetry fields
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    nvidia_attempted: bool = False
+    nvidia_succeeded: bool = False
+    validation_rejections: Optional[str] = None
+    # BUG-08 FIX: Declared as a proper dataclass field instead of being dynamically
+    # set with setattr(). Dynamic attribute setting on dataclasses is fragile and
+    # breaks if __slots__ is ever added. Field defaults to False so no existing
+    # code that doesn't set it is affected.
+    retry_triggered: bool = False
 
-def _classify_http_error(status_code: int) -> str:
+
+def _classify_http_error(status_code: int, response_body: str = "") -> str:
     """Maps HTTP status codes to canonical error type strings."""
     if status_code == 429:
         return "rate_limit"
     if status_code == 401 or status_code == 403:
         return "auth_error"
     if status_code == 413 or status_code == 400:
+        # Check if 400 is actually an unsupported feature (like tools on Groq)
+        body_lower = response_body.lower()
+        if "tool calling" in body_lower or "unsupported" in body_lower or "invalid_request_error" in body_lower:
+            return "unsupported_feature"
         # 400 can be context_exceeded on some providers
         return "context_exceeded"
     if status_code >= 500:
@@ -141,6 +159,7 @@ async def call_candidate(
     tool_whitelist: Optional[list] = None,
     expected_tool_schema: Optional[dict] = None,
     timeout_override: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> RaceResult:
     """
     Makes a single HTTP call to one LLM candidate, validates the response, and
@@ -156,14 +175,29 @@ async def call_candidate(
 
     effective_timeout = timeout_override or await _get_dynamic_timeout(provider, model_id, tier)
 
+    # BUG-06 integration: get_endpoint_url raises ValueError for providers with
+    # empty base_url (Tier 2/3 providers not yet fully configured). Catch it here
+    # so it surfaces as a clean "not_configured" error rather than a crash.
     try:
+        url = get_endpoint_url(provider, model_id)
+    except ValueError as ve:
+        logger.error(f"[{provider}/{model_id}] Configuration error: {ve}")
+        return RaceResult(
+            success=False, content=None, tool_calls=None,
+            model_used=model_id, provider_used=provider,
+            latency_ms=0.0, error_type="not_configured",
+        )
+
+    try:
+        # Update last used timestamp for prober tracking
+        await update_last_used(provider, model_id)
+
         # Track RPM usage before the call
         await increment_rpm(provider, model_id)
 
-        url = get_endpoint_url(provider)
         headers = get_auth_headers(provider)
         headers["Content-Type"] = "application/json"
-        body = build_request(provider, model_id, messages, max_tokens, tools)
+        body = build_request(provider, model_id, messages, max_tokens, tools, temperature=temperature)
 
         # asyncio.wait_for gives us a hard wall-clock deadline. When it fires,
         # CancelledError propagates into the httpx await, closing the TCP connection.
@@ -187,7 +221,9 @@ async def call_candidate(
             )
 
         if raw.status_code != 200:
-            error_type = _classify_http_error(raw.status_code)
+            if raw.status_code == 400:
+                logger.error(f"[{provider}/{model_id}] HTTP 400 Body: {raw.text}")
+            error_type = _classify_http_error(raw.status_code, raw.text)
             logger.warning(f"[{provider}/{model_id}] HTTP {raw.status_code} → {error_type}")
             await record_failure(provider, model_id, error_type)
             await record_circuit_failure(provider, model_id)
@@ -216,6 +252,14 @@ async def call_candidate(
             expected_tool_schema=expected_tool_schema,
             tool_whitelist=tool_whitelist,
         )
+        
+        usage = parsed.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = None
+        if prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+            
         if not is_valid:
             logger.warning(f"[{provider}/{model_id}] Validation failed: {failure_reason}")
             # HTTP 200 but bad content → treated as a real failure
@@ -225,6 +269,8 @@ async def call_candidate(
                 success=False, content=parsed.get("content"), tool_calls=None,
                 model_used=model_id, provider_used=provider,
                 latency_ms=latency_ms, error_type=failure_reason,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens,
+                validation_rejections=failure_reason
             )
 
         # ── Success ─────────────────────────────────────────────────────────
@@ -242,6 +288,9 @@ async def call_candidate(
             provider_used=provider,
             latency_ms=latency_ms,
             error_type=None,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens
         )
 
     except asyncio.TimeoutError:
@@ -415,7 +464,12 @@ async def execute_race(
     nvidia_candidates, other_candidates = split_nvidia_first(candidates)
 
     # Step 3 — NVIDIA-first: try each NVIDIA candidate sequentially
+    nvidia_attempted = False
+    nvidia_succeeded = False
+    validation_rejections = []
+    
     for nv_candidate in nvidia_candidates:
+        nvidia_attempted = True
         logger.info(
             f"NVIDIA-first attempt: {nv_candidate['provider']}/{nv_candidate['model_id']}"
         )
@@ -430,7 +484,14 @@ async def execute_race(
             expected_tool_schema=expected_tool_schema,
             timeout_override=NVIDIA_FIRST_TIMEOUT,
         )
+        if result.validation_rejections:
+            validation_rejections.append(f"{nv_candidate['provider']}:{result.validation_rejections}")
+            
         if result.success:
+            nvidia_succeeded = True
+            result.nvidia_attempted = nvidia_attempted
+            result.nvidia_succeeded = nvidia_succeeded
+            result.validation_rejections = ",".join(validation_rejections) if validation_rejections else None
             return result
         # NVIDIA failed/timed out — try next NVIDIA candidate (if any), then fall through
 
@@ -439,7 +500,7 @@ async def execute_race(
         logger.info(
             f"NVIDIA exhausted — racing {len(other_candidates[:3])} other candidates"
         )
-        return await _race_parallel(
+        race_res = await _race_parallel(
             other_candidates,
             messages,
             effective_max_tokens,
@@ -448,11 +509,19 @@ async def execute_race(
             tool_whitelist,
             expected_tool_schema,
         )
+        if race_res.validation_rejections:
+            validation_rejections.append(race_res.validation_rejections)
+            
+        race_res.nvidia_attempted = nvidia_attempted
+        race_res.nvidia_succeeded = nvidia_succeeded
+        race_res.validation_rejections = ",".join(validation_rejections) if validation_rejections else None
+        return race_res
 
-    # Step 5 — all candidates failed
-    logger.warning(f"All candidates exhausted for tier '{actual_tier}'")
     return RaceResult(
         success=False, content=None, tool_calls=None,
         model_used=None, provider_used=None,
         latency_ms=0.0, error_type="all_candidates_failed",
+        nvidia_attempted=nvidia_attempted,
+        nvidia_succeeded=nvidia_succeeded,
+        validation_rejections=",".join(validation_rejections) if validation_rejections else None
     )

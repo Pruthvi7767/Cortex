@@ -4,4 +4,4 @@ python-dotenv
 pydantic
 redis
 httpx
-supabase
+asyncpg

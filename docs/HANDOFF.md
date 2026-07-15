@@ -1,42 +1,25 @@
-# Handoff to Phase 7
+# Handoff (Post-Phase 7 Maintenance)
 
 ## What THIS phase built
-- `auth.py` — `generate_api_key()`, `verify_api_key(raw_key) -> caller_info`, `check_caller_rate_limit(caller_id, limit_per_minute) -> bool`.
-- `create_api_key.py` — CLI key generator.
-- `logger.py` — `log_request(...)` (safe database insertion), `get_recent_failures(limit) -> list`.
-- `supabase_schema.sql` — database schema with Row Level Security (RLS) policies.
+- `main.py` rewritten with the `/v1/complete` endpoint integrating Auth, Quota/Rate Limiting, Idempotency, Pulse, and UCB1 Racing with retry mechanism.
+- `execute_with_retry` wrapper in `main.py` ensuring a single full retry after a 2s backoff on cascade failure.
+- Config updates including `MAX_PROMPT_CHARS = 500000` to prevent payload DoS.
+- Docker Compose updates (Redis persistence via `redis-server --save 60 1`, postgres 16 added, `restart: unless-stopped`).
+- Healthcheck endpoint `/health` expanded with circuit breaker status tracking.
+- Test suite `test_phase7_chaos.py` simulating 8 core failure scenarios.
+- Database layer fully migrated from Supabase SDK to raw Postgres via `asyncpg` connection pooling in `db.py`. New telemetry tracking tokens and nvidia prioritization integrated into `requests_log`.
 
-## What THIS phase explicitly did NOT build
-- Wiring of auth and logging into the final `/v1/complete` endpoint.
-- Integrating tool-calling validation/whitelisting.
-- Docker Compose orchestration config.
+## What THIS phase explicitly did NOT do
+- Did not implement streaming support.
+- Did not implement semantic exact-match caching.
+- Did not implement cost-based routing (only handles free tiers).
+- Did not implement `/complete-verified` best-of-N+judge endpoint.
 
-## Key interface for Phase 7 to understand
+## Exact next step for Maintainers
+- Load test the production deployment under real usage.
+- Monitor `requests_log` on Supabase to ensure all asynchronous fire-and-forget logging handles production throughput without data loss.
+- Observe Redis memory usage to ensure sliding window rate limits (ZSETs) and idempotency keys do not cause unchecked growth.
 
-### `verify_api_key(raw_key: str) -> Optional[dict]`
-- Takes the incoming authorization header token (from FastAPI dependency).
-- Returns `{"caller_id": str, "rate_limit_per_minute": int}` if validated, or `None`.
-
-### `check_caller_rate_limit(caller_id: str, limit_per_minute: int) -> bool`
-- Checks caller's sliding window rate limit using local Redis.
-- Returns `True` (under limit) or `False` (rate-limited, return HTTP 429).
-- Check this immediately after authenticating the request.
-
-### `log_request(...)` (in logger.py)
-- Call this inside the endpoint handler using `asyncio.create_task(log_request(...))` so that it is fire-and-forget and does not block the response loop.
-- Parameters: `request_id`, `caller_id`, `tier_requested`, `tier_source` ("manual" or "auto"), `provider_used`, `model_used`, `latency_ms`, `success`, `error_type`.
-
-## Exact next step for Phase 7
-1. Set up the final public `/v1/complete` (POST) endpoint in `main.py`.
-2. Add FastAPI authorization header parsing (dependency) and call `verify_api_key()`.
-3. Add caller rate limit check using `check_caller_rate_limit()`.
-4. Run Pulse's `resolve_tier()` to compute target tier if none is explicitly specified.
-5. Invoke Phase 4's `execute_race()` with the determined tier and request payload.
-6. Enforce a retry mechanism wrapping `execute_race()`: if the race fails, perform exactly 1 full retry of the entire tier cascade after a 2-3s backoff.
-7. Wrap response generation with async fire-and-forget `log_request()` using `asyncio.create_task()`.
-8. Integrate tool whitelisting and argument schema verification via `validation.py`.
-9. Ensure `close_http_client()` from `race.py` is registered in FastAPI lifespan shutdown.
-
-## Watch out for
-- The "1 full retry" must only be done once (total 2 attempts max).
-- If the request fails both attempts, return HTTP 500 or appropriate error code containing the final failure's `error_type` in the payload.
+## Environment/config notes
+- New `MAX_PROMPT_CHARS` parameter introduced in `config.py`.
+- Redis now saves to disk via the `./data` volume mount (`redis_data` in Docker Compose). Ensure volume backups are configured in production.

@@ -27,6 +27,26 @@ TIER_TIMEOUTS = {
 # NVIDIA has no daily cap so we can afford an aggressive cutoff here.
 NVIDIA_FIRST_TIMEOUT = 2.0
 
+# Dedicated classifier models for Pulse Layer 2b (hedged request pattern).
+# One per provider — cheapest/fastest model available.
+# Priority order matters: first healthy entry = PRIMARY, second = BACKUP.
+# NVIDIA first (no daily token cap), then Groq, Cerebras, Google, Mistral, Cloudflare, Ollama.
+# These are ONLY used by Pulse — never included in routing decisions.
+CLASSIFIER_MODELS = [
+    {"provider": "nvidia",     "model_id": "nvidia/nemotron-mini-4b-instruct"},
+    {"provider": "groq",       "model_id": "llama-3.1-8b-instant"},
+    {"provider": "cerebras",   "model_id": "llama3.1-8b"},
+    {"provider": "google",     "model_id": "gemini-2.5-flash-lite"},
+    {"provider": "mistral",    "model_id": "ministral-3b-latest"},
+    {"provider": "cloudflare", "model_id": "@cf/meta/llama-3.1-8b-instruct-fp8"},
+    {"provider": "ollama",     "model_id": "gpt-oss:20b"},
+]
+
+# Dedicated Embedding model for Pulse Layer 3 (Embedding Ensemble).
+# This is called concurrently with Layer 2b. We default to Google (Gemini).
+EMBEDDING_PROVIDER = "google"
+EMBEDDING_MODEL = "text-embedding-004"
+
 # Maximum tokens per response per tier — prevents runaway generation consuming quota.
 TIER_MAX_TOKENS = {
     "fast": 300,
@@ -34,8 +54,17 @@ TIER_MAX_TOKENS = {
     "strong": 2000
 }
 
+# Maximum characters allowed for an incoming prompt to prevent payload DoS.
+MAX_PROMPT_CHARS = 500000
+
 # Redis configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# PostgreSQL configuration
+# BUG-12 FIX: Changed default fallback port from 5433 → 5432 to match docker-compose.yml.
+# The docker-compose postgres service maps 5432:5432; the old 5433 default caused
+# connection failures when DATABASE_URL was not explicitly set in the environment.
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
 
 # Quota limits (daily limit of requests/tokens depending on provider semantics)
 QUOTA_LIMITS = {

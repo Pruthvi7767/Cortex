@@ -1,10 +1,10 @@
 """
-logger.py — Async request logging to Supabase and troubleshooting query helper.
+logger.py — Async request logging to Postgres and troubleshooting query helper.
 """
 
 import logging
 from typing import Optional
-from auth import get_supabase_client
+from db import get_pool
 
 logger = logging.getLogger("cortex.logger")
 
@@ -17,10 +17,17 @@ async def log_request(
     model_used: Optional[str],
     latency_ms: Optional[int],
     success: bool,
-    error_type: Optional[str] = None
+    error_type: Optional[str] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
+    decision_score: Optional[float] = None,
+    nvidia_attempted: Optional[bool] = None,
+    nvidia_succeeded: Optional[bool] = None,
+    validation_rejections: Optional[str] = None
 ):
     """
-    Inserts a row into Supabase's requests_log table.
+    Inserts a row into the Postgres requests_log table.
     
     CRITICAL: Swallows all database exceptions to prevent logging failures from
     impacting client API responses.
@@ -28,21 +35,27 @@ async def log_request(
     This function should be called via asyncio.create_task() to be non-blocking.
     """
     try:
-        supabase = await get_supabase_client()
-        await supabase.table("requests_log").insert({
-            "request_id": request_id,
-            "caller_id": caller_id,
-            "tier_requested": tier_requested,
-            "tier_source": tier_source,
-            "provider_used": provider_used,
-            "model_used": model_used,
-            "latency_ms": latency_ms,
-            "success": success,
-            "error_type": error_type
-        }).execute()
+        pool = get_pool()
+        query = """
+            INSERT INTO requests_log (
+                request_id, caller_id, tier_requested, tier_source, provider_used,
+                model_used, latency_ms, success, error_type, prompt_tokens,
+                completion_tokens, total_tokens, decision_score, nvidia_attempted,
+                nvidia_succeeded, validation_rejections
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+            )
+        """
+        await pool.execute(
+            query,
+            request_id, caller_id, tier_requested, tier_source, provider_used,
+            model_used, latency_ms, success, error_type, prompt_tokens,
+            completion_tokens, total_tokens, decision_score, nvidia_attempted,
+            nvidia_succeeded, validation_rejections
+        )
     except Exception as e:
         # Never let logging crash the request pipeline
-        logger.warning(f"Failed to log request {request_id} to Supabase: {e}")
+        logger.warning(f"Failed to log request {request_id} to Postgres: {e}")
 
 
 async def get_recent_failures(limit: int = 50) -> list:
@@ -50,14 +63,10 @@ async def get_recent_failures(limit: int = 50) -> list:
     Helper to query recent failed requests for diagnostics.
     """
     try:
-        supabase = await get_supabase_client()
-        res = await supabase.table("requests_log")\
-            .select("*")\
-            .eq("success", False)\
-            .order("created_at", desc=True)\
-            .limit(limit)\
-            .execute()
-        return res.data or []
+        pool = get_pool()
+        query = "SELECT * FROM requests_log WHERE success = false ORDER BY created_at DESC LIMIT $1"
+        rows = await pool.fetch(query, limit)
+        return [dict(row) for row in rows]
     except Exception as e:
-        logger.error(f"Error querying recent failures from Supabase: {e}")
+        logger.error(f"Error querying recent failures from Postgres: {e}")
         return []

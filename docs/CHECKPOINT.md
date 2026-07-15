@@ -7,11 +7,12 @@
 - [x] Phase 4 — Race execution (completed: 2026-07-12)
 - [x] Phase 5 — Pulse (auto-classifier) (completed: 2026-07-12)
 - [x] Phase 6 — Auth & logging (completed: 2026-07-12)
-- [ ] Phase 7 — Tool-calling & integration
-
+- [x] Phase 7 — Tool-calling & integration (completed: 2026-07-12)
+- [x] Phase 8 — Targeted Fixes (completed: 2026-07-12)
+- [x] Phase 8.5 — Supabase to Postgres Migration (completed: 2026-07-12)
 ## Files that exist so far
-- `requirements.txt` — contains fastapi, pydantic, uvicorn, redis, httpx, python-dotenv, supabase.
-- `.env.example` — template with all 24 provider key names across 3 tiers, plus ENVIRONMENT, REDIS_URL, SUPABASE_URL, SUPABASE_KEY.
+- `requirements.txt` — contains fastapi, pydantic, uvicorn, redis, httpx, python-dotenv, asyncpg.
+- `.env.example` — template with all 24 provider key names across 3 tiers, plus ENVIRONMENT, REDIS_URL, DATABASE_URL.
 - `config.py` — provider registry, tier timeouts, quota/RPM limits, environment loader, and hot-reload compatible `get_active_providers` function.
 - `main.py` — minimal FastAPI app with lifespan context manager for startup check, and `/health` endpoint.
 - `Dockerfile` — Python 3.11-slim setup.
@@ -29,12 +30,13 @@
 - `classifier.py` — Pulse auto-classifier with `extract_features()`, `needs_llm_classification()`, `llm_classify_confidence()`, `decision_score()`, `classify_tier()`, and `resolve_tier()`. Layer 4 adaptive thresholds left as documented placeholder.
 - `auth.py` — api_keys verification, generation and own-proxy rate limiter check.
 - `create_api_key.py` — key creation script.
-- `logger.py` — safe fire-and-forget log insertion and diagnostic fetch functions.
-- `supabase_schema.sql` — PostgreSQL database migration schema.
+- `logger.py` — safe fire-and-forget log insertion and diagnostic fetch functions using asyncpg.
+- `db.py` — asyncpg connection pool initialization and teardown logic.
+- `postgres_schema.sql` — PostgreSQL database migration schema (replaces supabase_schema.sql).
+- `test_phase7_chaos.py` — Chaos/Failure tests for Phase 7 integrations.
 
 ## Known issues / TODOs left for later phases
-- Wiring of Pulse, auth, and logging into the final `/v1/complete` endpoint with retry mechanism (Phase 7).
-- Integrating tool whitelisting and verification (Phase 7).
+- Project is complete for all 7 phases. Future work includes streaming support, cost-based routing, and semantic exact-match caching.
 
 ## Decisions made (that future phases must respect)
 - Algorithm: UCB1, not Thompson Sampling or LinUCB.

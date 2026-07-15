@@ -1,5 +1,5 @@
 """
-provider_adapters.py — thin adapter layer for multi-provider HTTP shapes.
+provider_adapters.py — Thin adapter layer for multi-provider HTTP shapes.
 
 Most providers expose an OpenAI-compatible chat completions endpoint.
 Google Gemini is the one confirmed exception: while its generativelanguage.googleapis.com
@@ -7,10 +7,14 @@ path does have an OpenAI-compat shim (/v1beta/openai/), the native path differs.
 We use the OpenAI-compat shim for Google too (base_url already set in config.py),
 so request body stays uniform — but the auth mechanism differs: Google needs the
 API key as a Bearer token in the Authorization header (same as others via the shim).
-The native Gemini format (contents[] etc.) is NOT used here — the compat path handles it.
 
 A separate ParseError is raised (not silently swallowed) when a response doesn't match
 the expected schema — per AGENT.md Section 5, HTTP 200 alone is never enough.
+
+BUG-06 FIX: get_endpoint_url() now raises ValueError for providers with an empty
+base_url instead of silently constructing a malformed relative URL ("/chat/completions").
+This surfaces Tier 2/3 providers that haven't been fully configured rather than letting
+them consume race slots and fail with a generic network error.
 """
 
 import os
@@ -25,12 +29,20 @@ class ParseError(Exception):
     pass
 
 
-def get_endpoint_url(provider: str) -> str:
+def get_endpoint_url(provider: str, model_id: str = "") -> str:
     """
     Returns the chat completions URL for the given provider by reading the
-    provider registry from config.py. The URL is the base_url + /chat/completions.
+    provider registry from config.py. The URL is base_url + /chat/completions.
+
     Cloudflare's base_url contains a {CLOUDFLARE_ACCOUNT_ID} placeholder that
     is resolved here from the environment.
+
+    BUG-06 FIX: Raises ValueError if base_url is empty. Tier 2/3 providers
+    in the registry have empty base_url strings as placeholders for future
+    implementation. Previously, get_endpoint_url() would silently produce
+    "/chat/completions" (a relative path), causing httpx to raise an error
+    that was only caught as a generic server_error — wasting a race slot and
+    hiding the real problem (unconfigured base_url).
     """
     from config import get_provider_registry
     registry = {p["id"]: p for p in get_provider_registry()}
@@ -40,7 +52,12 @@ def get_endpoint_url(provider: str) -> str:
 
     base_url = registry[provider]["base_url"].rstrip("/")
 
-    # Resolve Cloudflare's account ID placeholder at call time
+    if not base_url:
+        raise ValueError(
+            f"Provider '{provider}' has an empty base_url in the registry. "
+            f"This provider is not yet fully configured for HTTP dispatch."
+        )
+
     if provider == "cloudflare":
         account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
         base_url = base_url.replace("{CLOUDFLARE_ACCOUNT_ID}", account_id)
@@ -51,7 +68,7 @@ def get_endpoint_url(provider: str) -> str:
 def get_auth_headers(provider: str) -> dict:
     """
     Returns the Authorization header for the given provider.
-    All providers use Bearer tokens read from their env var.
+    All providers use Bearer tokens read from their configured env var.
     """
     from config import get_provider_registry
     registry = {p["id"]: p for p in get_provider_registry()}
@@ -71,21 +88,23 @@ def build_request(
     messages: list,
     max_tokens: int,
     tools: Optional[list] = None,
+    temperature: Optional[float] = None,
 ) -> dict:
     """
     Returns the correctly-shaped JSON body for the given provider.
-
-    All providers in the registry use the OpenAI chat completions shape
-    (model, messages, max_tokens, optional tools). Google's generativelanguage
-    OpenAI-compat shim accepts this same shape, so no special-casing of the body
-    is needed — only the endpoint URL and headers differ (handled separately).
+    All active providers use the standard OpenAI chat completions shape.
     """
     body: dict = {
-        "model": model_id,
+        "model":  model_id,
         "messages": messages,
-        "max_tokens": max_tokens,
-        "stream": False,  # streaming deferred to a future phase per AGENT.md
+        "stream": False,
     }
+
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+
+    if temperature is not None:
+        body["temperature"] = temperature
 
     if tools:
         body["tools"] = tools
@@ -100,8 +119,8 @@ def parse_response(provider: str, raw_response: dict) -> dict:
 
     Returns:
         {
-            "content":          str | None,
-            "tool_calls":       list | None,
+            "content":    str | None,
+            "tool_calls": list | None,
             "usage": {
                 "prompt_tokens":     int,
                 "completion_tokens": int,
@@ -109,7 +128,7 @@ def parse_response(provider: str, raw_response: dict) -> dict:
         }
 
     Raises ParseError if the response doesn't match the OpenAI-compatible schema.
-    Never silently returns garbage — schema drift is treated as a failure.
+    Never silently returns garbage — schema drift is treated as a hard failure.
     """
     try:
         choices = raw_response.get("choices")
@@ -117,10 +136,10 @@ def parse_response(provider: str, raw_response: dict) -> dict:
             raise ParseError(f"[{provider}] 'choices' missing or empty in response")
 
         message = choices[0].get("message", {})
-        content = message.get("content")  # may be None for tool-only responses
+        content = message.get("content")       # may be None for tool-only responses
         tool_calls_raw = message.get("tool_calls")
 
-        # Normalise tool_calls into a clean list
+        # Normalise tool_calls into a clean, consistent list shape
         tool_calls = None
         if tool_calls_raw:
             tool_calls = []

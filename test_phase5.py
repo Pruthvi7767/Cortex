@@ -93,38 +93,43 @@ async def test3_decision_score():
 
 @patch("classifier.llm_classify_confidence", new_callable=AsyncMock)
 async def test4_classify_tier(mock_llm):
-    """classify_tier end-to-end with mocked LLM."""
-    mock_llm.return_value = 0.9 # high confidence if called
-    
-    # Simple -> fast (bypass LLM)
-    tier_simple = await classify_tier("what is love")
-    
-    # Stakes -> strong (bypass LLM)
-    tier_stakes = await classify_tier("deploy the production contract", context={"destination": "client"})
-    
-    # Ambiguous -> should call LLM and get 0.9 * 3.0 = 2.7 -> mid tier (threshold 2.0)
-    # Let's give it "analyze this", +1.0 for reasoning + 2.7 = 3.7 -> mid tier
-    tier_ambig = await classify_tier("analyze this data thoroughly")
-    
-    ok = (tier_simple == "fast" and tier_stakes == "strong" and tier_ambig == "mid")
-    report(4, ok, f"classify_tier e2e: simple={tier_simple}, stakes={tier_stakes}, ambig={tier_ambig}")
+    """classify_tier end-to-end with mocked LLM. classify_tier returns (tier, score, used_llm)."""
+    mock_llm.return_value = 0.9  # high confidence when called
+
+    # Simple -> fast (bypass LLM, score=-1.0)
+    tier_simple, score_simple, used_llm_simple = await classify_tier("what is love")
+
+    # Stakes -> strong (bypass LLM, score=5.5)
+    tier_stakes, score_stakes, used_llm_stakes = await classify_tier(
+        "deploy the production contract", context={"destination": "client"}
+    )
+
+    # Ambiguous -> mid (calls LLM: reasoning=1.0 + llm_conf=0.9*3.0=2.7 → score=3.7)
+    tier_ambig, score_ambig, used_llm_ambig = await classify_tier("analyze this data thoroughly")
+
+    ok = (tier_simple == "fast" and tier_stakes == "strong" and tier_ambig == "mid"
+          and used_llm_simple == False and used_llm_stakes == False and used_llm_ambig == True)
+    report(4, ok, f"classify_tier e2e: simple={tier_simple}(score={score_simple:.1f}), "
+                  f"stakes={tier_stakes}(score={score_stakes:.1f}), "
+                  f"ambig={tier_ambig}(score={score_ambig:.1f}, used_llm={used_llm_ambig})")
 
 
 @patch("classifier.classify_tier", new_callable=AsyncMock)
 async def test5_resolve_tier_override(mock_classify):
     """resolve_tier with explicit_tier returns immediately without calling classify_tier."""
-    result = await resolve_tier("test prompt", explicit_tier="strong")
-    ok = (result == "strong" and mock_classify.call_count == 0)
-    report(5, ok, f"resolve_tier manual override: result={result}, classify_tier_calls={mock_classify.call_count}")
+    tier, score, used_llm = await resolve_tier("test prompt", explicit_tier="strong")
+    ok = (tier == "strong" and mock_classify.call_count == 0 and score is None and used_llm is None)
+    report(5, ok, f"resolve_tier manual override: tier={tier}, score={score}, classify_tier_calls={mock_classify.call_count}")
 
 
 @patch("classifier.classify_tier", new_callable=AsyncMock)
 async def test6_resolve_tier_auto(mock_classify):
     """resolve_tier without explicit_tier calls classify_tier."""
-    mock_classify.return_value = "mid"
-    result = await resolve_tier("test prompt", explicit_tier=None)
-    ok = (result == "mid" and mock_classify.call_count == 1)
-    report(6, ok, f"resolve_tier auto fallback: result={result}, classify_tier_calls={mock_classify.call_count}")
+    # classify_tier returns (tier, score, used_llm)
+    mock_classify.return_value = ("mid", 3.5, True)
+    tier, score, used_llm = await resolve_tier("test prompt", explicit_tier=None)
+    ok = (tier == "mid" and mock_classify.call_count == 1)
+    report(6, ok, f"resolve_tier auto fallback: tier={tier}, classify_tier_calls={mock_classify.call_count}")
 
 
 async def run_all():

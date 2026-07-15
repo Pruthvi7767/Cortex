@@ -44,6 +44,7 @@ Phase 4 — Race execution: race.py, per-tier timeouts, response validation gate
 Phase 5 — Pulse (auto-classifier): classifier.py, Layer 1-4 tier auto-detection
 Phase 6 — Auth & logging: auth.py, API key system, Supabase request logging
 Phase 7 — Tool-calling & integration: tool-call validation/whitelisting, Docker Compose, final wiring
+Phase 8 — Close Audit Gaps: background_prober.py, Cloudflare adapter, .gitignore
 ```
 
 Branch naming: `phase-1-foundation`, `phase-2-redis-state`, `phase-3-router`,
