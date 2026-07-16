@@ -201,16 +201,28 @@ def _is_negated(prompt_lower: str, keyword_start: int) -> bool:
 
 # ── Layer 1: Feature Extraction ───────────────────────────────────────────────
 
-def _count_kw(kws: list, prompt_lower: str) -> int:
+def _is_reversible_context(prompt_lower: str, keyword_start: int, window: int = 40) -> bool:
+    """Returns True if a reversible context modifier is detected near the keyword."""
+    start = max(0, keyword_start - window)
+    end = min(len(prompt_lower), keyword_start + window)
+    local = prompt_lower[start:end]
+    return any(re.search(r'\b' + re.escape(mod) + r'\b', local) for mod in REVERSIBLE_MODIFIERS)
+
+
+def _count_kw(kws: list, prompt_lower: str, check_reversibility: bool = False) -> float:
     """
     Counts how many keywords from kws appear in prompt_lower (word-boundary matched),
     skipping any keyword that is preceded by a negation word within 30 chars.
+    If check_reversibility is True, matches in a reversible context are discounted (0.4).
     """
-    count = 0
+    count = 0.0
     for kw in kws:
         m = re.search(r'\b' + re.escape(kw) + r'\b', prompt_lower)
         if m and not _is_negated(prompt_lower, m.start()):
-            count += 1
+            if check_reversibility and _is_reversible_context(prompt_lower, m.start()):
+                count += 0.4
+            else:
+                count += 1.0
     return count
 
 
@@ -222,21 +234,6 @@ def _has_kw(kws, prompt_lower: str) -> bool:
         if re.search(r'\b' + re.escape(kw) + r'\b', prompt_lower):
             return True
     return False
-
-
-def irreversibility_multiplier(prompt_lower: str) -> float:
-    """
-    Returns 0.4 if a reversible context modifier is detected (staging, draft, test, etc.),
-    otherwise 1.0 (fully irreversible context).
-
-    Applied as a multiplier to the stakes score:
-      "deploy to production"         → mult=1.0 → stakes × 1.0 (full weight)
-      "deploy to staging for review" → mult=0.4 → stakes × 0.4 (heavily discounted)
-    """
-    for mod in REVERSIBLE_MODIFIERS:
-        if re.search(r'\b' + re.escape(mod) + r'\b', prompt_lower):
-            return 0.4
-    return 1.0
 
 
 def domain_boost(prompt_lower: str) -> float:
@@ -269,9 +266,9 @@ def intent_score(prompt_lower: str) -> float:
         score += 2.0
     if first in QUESTION_STARTERS:
         score -= 0.5
-    if any(u in prompt_lower for u in URGENCY_MARKERS):
+    if _has_kw(URGENCY_MARKERS, prompt_lower):
         score += 1.5
-    if any(h in prompt_lower for h in HYPOTHETICAL):
+    if _has_kw(HYPOTHETICAL, prompt_lower):
         score -= 1.0
     if prompt_lower.rstrip().endswith("!"):
         score += 0.5
@@ -301,6 +298,12 @@ def audience_score(prompt_lower: str, context: dict) -> float:
     return 0.0
 
 
+def _tool_name(t):
+    if isinstance(t, dict):
+        return (t.get("name") or "").lower()
+    return (getattr(t, "name", "") or "").lower()
+
+
 def tool_signal_score(tools: Optional[list]) -> float:
     """
     Scores based on provided tools (function calling):
@@ -313,7 +316,7 @@ def tool_signal_score(tools: Optional[list]) -> float:
     base = min(len(tools) * 0.5, 2.0)
     write_count = sum(
         1 for t in tools
-        if any(m in (t.get("name") or "").lower() for m in WRITE_TOOL_MARKERS)
+        if any(m in _tool_name(t) for m in WRITE_TOOL_MARKERS)
     )
     return base + (write_count * 0.75)
 
@@ -333,10 +336,8 @@ def extract_features(
 
     prompt_lower = prompt.lower()
 
-    # Irreversibility multiplier — computed once, applied to stakes
-    irr_mult = irreversibility_multiplier(prompt_lower)
-
-    stakes_count    = _count_kw(STAKES_KEYWORDS, prompt_lower)    # negation-aware
+    # Irreversibility multiplier is now integrated into _count_kw for stakes
+    stakes_count    = _count_kw(STAKES_KEYWORDS, prompt_lower, check_reversibility=True)    # negation-aware, reversibility-aware
     reasoning_count = _count_kw(REASONING_KEYWORDS, prompt_lower)
     has_simple      = _has_kw(SIMPLE_KEYWORDS, prompt_lower)
 
@@ -344,7 +345,7 @@ def extract_features(
         "length":               len(prompt),
         "stakes_count":         stakes_count,
         "reasoning_count":      reasoning_count,
-        "irreversibility_mult": irr_mult,
+        "irreversibility_mult": 1.0,
         "has_stakes_keywords":  stakes_count > 0,   # kept for bypass logic compat
         "has_reasoning_keywords": reasoning_count > 0,
         "has_numbers":          bool(re.search(r'\d', prompt)),
@@ -611,6 +612,14 @@ async def classify_tier(
 
     # L1 definitive early exits (no LLM needed)
     fast_t, strong_t = await get_caller_thresholds(caller_id or "default")
+    
+    # BUG-25 Fix: Force STRONG tier for high-stakes keywords or user-facing context
+    if features.get("has_stakes_keywords") or features.get("is_user_facing"):
+        tier = "strong"
+        await set_pulse_cache(prompt, tier)
+        logger.info(f"Pulse: score={score:.2f} (explicitly strong context) → {tier}")
+        return tier, score, False
+
     # Note: Using Platt scaled threshold equivalents for early exits (approx > 9.0 and < 0.35)
     if score >= 9.0:
         tier = "strong"

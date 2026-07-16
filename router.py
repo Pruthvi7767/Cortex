@@ -1,3 +1,4 @@
+import asyncio
 import math
 import logging
 from typing import Optional, NamedTuple
@@ -89,11 +90,11 @@ async def get_candidates(
 
     tier_models = [m for m in tier_models if m["provider"] in active_ids]
 
-    # Step 3 — availability (single call handles circuit, quota, rate-limit)
-    available = []
-    for m in tier_models:
-        if await check_availability(m["provider"], m["model_id"]):
-            available.append(m)
+    # BUG-30 Fix: Use asyncio.gather for concurrent availability checks
+    availability_results = await asyncio.gather(
+        *(check_availability(m["provider"], m["model_id"]) for m in tier_models)
+    )
+    available = [m for m, is_avail in zip(tier_models, availability_results) if is_avail]
 
     # Step 4 — context window filter (15% safety margin)
     if estimated_tokens > 0:
@@ -103,11 +104,11 @@ async def get_candidates(
     if not available:
         return []
 
-    # Step 5 — rank by UCB1 descending
-    scored = []
-    for m in available:
-        score = await ucb1_score(m["provider"], m["model_id"], tier)
-        scored.append((score, m))
+    # BUG-30 Fix: Use asyncio.gather for concurrent scoring
+    scores = await asyncio.gather(
+        *(ucb1_score(m["provider"], m["model_id"], tier) for m in available)
+    )
+    scored = list(zip(scores, available))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 

@@ -139,15 +139,15 @@ async def increment_rpm(provider: str, model_id: str):
     with no race window.
     """
     counter_key = f"model:{provider}:{model_id}:rpm_used"
+    provider_key = f"provider:{provider}:rpm_used"
 
     async def _update():
-        # Atomically create the key with a 60-second TTL if it doesn't exist yet.
-        # NX = only set if Not eXists; EX = expire in seconds.
-        # If the key already exists, SET NX does nothing — the existing TTL is preserved.
+        # Atomically create the keys with a 60-second TTL if they don't exist yet.
         await client.set(counter_key, 0, ex=60, nx=True)
+        await client.set(provider_key, 0, ex=60, nx=True)
         # Always increment; the key is guaranteed to have a TTL from the SET NX above
-        # (or from a previous call that already initialized it).
         await client.incr(counter_key)
+        await client.incr(provider_key)
 
     await _safe_execute(_update())
 
@@ -155,13 +155,17 @@ async def increment_rpm(provider: str, model_id: str):
 async def is_rate_limited(provider: str, model_id: str) -> bool:
     """Returns True if the model has hit its RPM cap in the current window."""
     key = f"model:{provider}:{model_id}:rpm_used"
+    provider_key = f"provider:{provider}:rpm_used"
     limit = RPM_LIMITS.get(provider, RPM_LIMITS["default"])
 
     async def _check():
         val = await client.get(key)
-        if not val:
-            return False
-        return int(val) >= limit
+        pval = await client.get(provider_key)
+        
+        c = int(val) if val else 0
+        p = int(pval) if pval else 0
+        
+        return max(c, p) >= limit
 
     return await _safe_execute(_check())
 
@@ -305,6 +309,24 @@ async def get_caller_thresholds(caller_id: str) -> tuple[float, float]:
         if raw:
             fast_t, strong_t = raw.split(",")
             return float(fast_t), float(strong_t)
+            
+        # BUG-23 Fix: Fallback to Postgres on Redis miss
+        from db import get_pool
+        try:
+            pool = get_pool()
+            row = await pool.fetchrow(
+                "SELECT fast_threshold, strong_threshold FROM pulse_profiles WHERE caller_id = $1",
+                caller_id,
+            )
+            if row:
+                fast_t = float(row["fast_threshold"])
+                strong_t = float(row["strong_threshold"])
+                # Repopulate Redis cache
+                await client.set(key, f"{fast_t},{strong_t}", ex=86400)
+                return fast_t, strong_t
+        except Exception as e:
+            logger.error(f"Postgres fallback failed for pulse thresholds: {e}")
+            
         return 2.0, 5.0
     try:
         return await _safe_execute(_get())

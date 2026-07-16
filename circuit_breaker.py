@@ -13,7 +13,7 @@ from redis_store import client, _safe_execute
 
 MAX_COOLDOWN_SECONDS = 600  # 10 minutes maximum backoff
 BASE_COOLDOWN_SECONDS = 30  # initial cooldown duration
-FAILURE_THRESHOLD = 2       # consecutive failures required to trip the breaker
+FAILURE_THRESHOLD = 3       # consecutive failures required to trip the breaker
 
 
 async def get_circuit_state(provider: str, model_id: str) -> str:
@@ -28,7 +28,7 @@ async def get_circuit_state(provider: str, model_id: str) -> str:
         state = await client.get(state_key)
         if not state:
             state = "CLOSED"
-            await client.set(state_key, state)
+            await client.set(state_key, state, ex=86400)
 
         if state == "OPEN":
             cooldown = await client.get(cooldown_key)
@@ -37,11 +37,11 @@ async def get_circuit_state(provider: str, model_id: str) -> str:
                 cooldown_time = datetime.datetime.fromisoformat(cooldown)
                 if now >= cooldown_time:
                     state = "HALF_OPEN"
-                    await client.set(state_key, state)
+                    await client.set(state_key, state, ex=86400)
             else:
                 # No cooldown set but state is OPEN — edge case. Transition to HALF_OPEN.
                 state = "HALF_OPEN"
-                await client.set(state_key, state)
+                await client.set(state_key, state, ex=86400)
 
         return state
 
@@ -56,6 +56,8 @@ async def record_circuit_failure(provider: str, model_id: str):
 
     async def _fail():
         count = await client.incr(fail_count_key)
+        # BUG-28 Fix: Add TTL to prevent stale failure counts from persisting forever
+        await client.expire(fail_count_key, 3600)
         if count >= FAILURE_THRESHOLD:
             await trip_circuit(provider, model_id)
 
@@ -78,7 +80,7 @@ async def trip_circuit(provider: str, model_id: str):
     fail_count_key = f"model:{provider}:{model_id}:consecutive_failures"
 
     async def _trip():
-        await client.set(state_key, "OPEN")
+        await client.set(state_key, "OPEN", ex=86400)
 
         # Exponential backoff: double previous duration, cap at MAX_COOLDOWN_SECONDS
         prev_duration = await client.get(prev_cooldown_duration_key)
@@ -87,11 +89,11 @@ async def trip_circuit(provider: str, model_id: str):
         else:
             new_duration = BASE_COOLDOWN_SECONDS
 
-        await client.set(prev_cooldown_duration_key, new_duration)
+        await client.set(prev_cooldown_duration_key, new_duration, ex=86400)
 
         now = datetime.datetime.now(datetime.timezone.utc)
         cooldown_time = now + datetime.timedelta(seconds=new_duration)
-        await client.set(cooldown_key, cooldown_time.isoformat())
+        await client.set(cooldown_key, cooldown_time.isoformat(), ex=86400)
 
         # BUG-04 FIX: Reset the failure counter so HALF_OPEN probes start fresh.
         # Without this, the counter stays at FAILURE_THRESHOLD, causing the first

@@ -24,7 +24,7 @@ from typing import Optional
 
 import httpx
 
-from config import TIER_TIMEOUTS, TIER_MAX_TOKENS, NVIDIA_FIRST_TIMEOUT
+from config import TIER_TIMEOUTS, TIER_MAX_TOKENS, NVIDIA_FIRST_TIMEOUT, FALLBACK_RACE_WIDTH
 from provider_adapters import (
     build_request,
     parse_response,
@@ -42,6 +42,7 @@ from redis_store import (
     increment_tier_requests,
     update_last_used,
     _safe_execute,
+    increment_quota_usage,
 )
 from circuit_breaker import record_circuit_failure, reset_circuit
 from router import get_candidates_with_cascade, split_nvidia_first
@@ -212,8 +213,13 @@ async def call_candidate(
         if raw.status_code == 429:
             # Rate limit / quota hit — do NOT lower quality score
             logger.warning(f"[{provider}/{model_id}] 429 rate limit")
-            # increment_rpm already called above; quota tracking is caller's
-            # responsibility at higher level (we don't know tokens_used yet)
+            # BUG-26 Fix: Flag model as recently rate limited (TTL 60s)
+            async def _flag_429():
+                await redis_client.set(f"model:{provider}:{model_id}:recent_429", "1", ex=60)
+            try:
+                await _safe_execute(_flag_429())
+            except Exception:
+                pass
             return RaceResult(
                 success=False, content=None, tool_calls=None,
                 model_used=model_id, provider_used=provider,
@@ -278,6 +284,12 @@ async def call_candidate(
         await record_success(provider, model_id)
         await reset_circuit(provider, model_id)
         await increment_tier_requests(tier)
+        # BUG-17 Fix: Wire quota usage tracking on success
+        total_tokens = parsed.get("usage", {}).get("prompt_tokens", 0) + parsed.get("usage", {}).get("completion_tokens", 0)
+        try:
+            await increment_quota_usage(provider, model_id, total_tokens)
+        except Exception as exc:
+            logger.error(f"Failed to record quota usage for {provider}/{model_id}: {exc}")
 
         logger.info(f"[{provider}/{model_id}] SUCCESS in {latency_ms:.0f}ms")
         return RaceResult(
@@ -443,8 +455,9 @@ async def execute_race(
     effective_max_tokens = max_tokens or TIER_MAX_TOKENS.get(tier, 800)
 
     # Step 1 — get candidates (router handles filtering, UCB1, cascade)
+    # BUG-19 Fix: Increase k to provide enough non-NVIDIA fallback candidates
     candidate_result = await get_candidates_with_cascade(
-        tier, k=3, estimated_tokens=estimated_tokens
+        tier, k=8, estimated_tokens=estimated_tokens
     )
     actual_tier = candidate_result.tier
     candidates = candidate_result.candidates
@@ -498,10 +511,10 @@ async def execute_race(
     # Step 4 — fan out to other providers in parallel
     if other_candidates:
         logger.info(
-            f"NVIDIA exhausted — racing {len(other_candidates[:3])} other candidates"
+            f"NVIDIA exhausted — racing {len(other_candidates[:FALLBACK_RACE_WIDTH])} other candidates"
         )
         race_res = await _race_parallel(
-            other_candidates,
+            other_candidates[:FALLBACK_RACE_WIDTH],
             messages,
             effective_max_tokens,
             actual_tier,

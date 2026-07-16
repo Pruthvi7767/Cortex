@@ -136,7 +136,16 @@ def parse_response(provider: str, raw_response: dict) -> dict:
             raise ParseError(f"[{provider}] 'choices' missing or empty in response")
 
         message = choices[0].get("message", {})
-        content = message.get("content")       # may be None for tool-only responses
+        raw_content = message.get("content")
+        
+        # BUG-14 Fix: Normalise list-type content (e.g. Mistral multi-part) to a plain string
+        if isinstance(raw_content, list):
+            content = "".join(
+                block.get("text", "") for block in raw_content if isinstance(block, dict)
+            )
+        else:
+            content = raw_content
+
         tool_calls_raw = message.get("tool_calls")
 
         # Normalise tool_calls into a clean, consistent list shape

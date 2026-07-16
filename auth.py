@@ -91,11 +91,11 @@ async def verify_api_key(raw_key: str) -> Optional[dict]:
         row = await pool.fetchrow(query, key_hash)
         if row:
             return dict(row)
+        return None
 
     except Exception as e:
         logger.error(f"Error during API key verification: {e}")
-
-    return None
+        raise e
 
 
 async def check_caller_rate_limit(caller_id: str, limit_per_minute: int) -> bool:

@@ -75,26 +75,34 @@ async def get_embedding(text: str) -> list[float] | None:
         logger.error(f"Embedding config error: {e}")
         return None
 
-    # Google specific OpenAI compatibility URL handling
+    # Google specific native API handling
     if EMBEDDING_PROVIDER == "google" and "v1beta/openai" in base_url:
-        url = base_url.rstrip("/") + "/embeddings"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        native_base = base_url.replace("/openai", "")
+        url = f"{native_base.rstrip('/')}/models/{EMBEDDING_MODEL}:embedContent"
+        headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        payload = {
+            "model": f"models/{EMBEDDING_MODEL}",
+            "content": {"parts": [{"text": text}]}
+        }
     else:
         # Generic OpenAI compatible
         url = base_url.rstrip("/") + "/embeddings"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    
-    payload = {
-        "model": EMBEDDING_MODEL,
-        "input": text
-    }
+        payload = {
+            "model": EMBEDDING_MODEL,
+            "input": text
+        }
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as http_client:
             resp = await http_client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data["data"][0]["embedding"]
+            
+            if EMBEDDING_PROVIDER == "google" and "v1beta/openai" in base_url:
+                return data["embedding"]["values"]
+            else:
+                return data["data"][0]["embedding"]
     except Exception as e:
         logger.error(f"Embedding API call failed: {e}")
         return None

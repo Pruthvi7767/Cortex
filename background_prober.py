@@ -86,8 +86,14 @@ async def prober_loop():
                     tasks.append(probe_model(provider_id, model_id, tier))
 
             if tasks:
+                # BUG-21 Fix: Use a semaphore to prevent thundering herds on prober
+                sem = asyncio.Semaphore(5)
+                async def _sem_probe(t):
+                    async with sem:
+                        return await t
+                
                 # Run all probes concurrently; gather exceptions so the loop never dies
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*[_sem_probe(t) for t in tasks], return_exceptions=True)
                 errors = [r for r in results if isinstance(r, Exception)]
                 if errors:
                     logger.warning(f"Prober: {len(errors)} probe(s) raised exceptions this cycle")

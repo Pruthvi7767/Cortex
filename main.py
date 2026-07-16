@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 import time
+import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -40,7 +41,12 @@ security = HTTPBearer()
 
 async def get_caller(credentials: HTTPAuthorizationCredentials = Security(security)):
     raw_key = credentials.credentials
-    caller_info = await verify_api_key(raw_key)
+    try:
+        caller_info = await verify_api_key(raw_key)
+    except Exception as e:
+        logger.error(f"Infrastructure error during auth: {e}")
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+
     if not caller_info:
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return caller_info
@@ -63,18 +69,55 @@ async def require_admin(caller_info: dict = Depends(get_caller)):
         raise HTTPException(status_code=403, detail="Admin privilege required")
     return caller_info
 
+async def quota_reset_loop():
+    logger.info("Background quota reset loop started.")
+    from redis_store import set_quota_reset_time
+    while True:
+        try:
+            for tier, models in MODEL_REGISTRY.items():
+                for m in models:
+                    await set_quota_reset_time(m["provider"], m["model_id"])
+            
+            now = datetime.datetime.now(datetime.timezone.utc)
+            tomorrow = now + datetime.timedelta(days=1)
+            midnight = datetime.datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=datetime.timezone.utc)
+            sleep_secs = (midnight - now).total_seconds() + 1
+            await asyncio.sleep(sleep_secs)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Quota loop error: {e}")
+            await asyncio.sleep(3600)
+
+async def thresholds_update_loop():
+    logger.info("Background thresholds update loop started.")
+    from pulse_learner import update_thresholds
+    while True:
+        try:
+            await update_thresholds()
+            await asyncio.sleep(6 * 3600)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Thresholds update loop error: {e}")
+            await asyncio.sleep(3600)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     assert_providers_configured()
     await init_db()
-    # Start the background prober
+    # Start the background tasks
     prober_task = asyncio.create_task(prober_loop())
+    quota_task = asyncio.create_task(quota_reset_loop())
+    threshold_task = asyncio.create_task(thresholds_update_loop())
     yield
     # Graceful shutdown
     prober_task.cancel()
+    quota_task.cancel()
+    threshold_task.cancel()
     try:
-        await prober_task
-    except asyncio.CancelledError:
+        await asyncio.gather(prober_task, quota_task, threshold_task, return_exceptions=True)
+    except Exception:
         pass
     await close_db()
     await close_http_client()
@@ -204,11 +247,15 @@ async def complete_endpoint(req: CompleteRequest, caller_info: dict = Depends(ch
 
     # ── Tier resolution ───────────────────────────────────────────────────────
     context_dict = {"history": req.context_history} if req.context_history else {}
+    
+    # Tool formatting: convert to dict early for classifier and downstream execution
+    tools_list = [t.model_dump(exclude_none=True) for t in req.tools] if req.tools else None
+    
     resolved_tier, decision_score, used_llm_classifier = await resolve_tier(
         prompt=req.prompt,
         explicit_tier=req.tier,
         context=context_dict,
-        tools=req.tools,
+        tools=tools_list,
         caller_id=caller_info["caller_id"]
     )
     tier_source = "manual" if req.tier else "auto"
@@ -226,9 +273,6 @@ async def complete_endpoint(req: CompleteRequest, caller_info: dict = Depends(ch
     if req.context_history:
         messages.extend(req.context_history)
     messages.append({"role": "user", "content": req.prompt})
-
-    # Tool formatting
-    tools_list = [t.model_dump(exclude_none=True) for t in req.tools] if req.tools else None
 
     # ── Execute ───────────────────────────────────────────────────────────────
     result = await execute_with_retry(

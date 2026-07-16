@@ -23,6 +23,9 @@ TIER_TIMEOUTS = {
     "strong": 5.0
 }
 
+# The number of non-NVIDIA candidates to race in parallel if the NVIDIA first-shot fails
+FALLBACK_RACE_WIDTH = 5
+
 # Short timeout for the NVIDIA-first single-shot attempt before fanning out to others.
 # NVIDIA has no daily cap so we can afford an aggressive cutoff here.
 NVIDIA_FIRST_TIMEOUT = 2.0
